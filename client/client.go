@@ -18,17 +18,28 @@ func main() {
 	//RawCall(os.Stdout,"11111","Puton","66","5","asd","6")
 
 	// Step 1
-	ret := CallRet("", "Login", "1", "132110600685", "qwer")
+	ret := CallRet("", "Login", "1", "13210600685", "qwer")
 	token := strings.Split(ret.Rets[0], "\x1f")[0]
 
 	log.Print("token:", token)
 	// Step 2
 	testcall := func(method string, args ...string) {
-		RawCall(os.Stdout, token, method, args...)
+		buf := bytes.NewBuffer(nil)
+		RawCall(buf, token, method, args...)
+		data := fmt.Sprintln(strings.Replace(buf.String(), `\u001f`, "|", -1))
+		var ret Ret
+		json.Unmarshal([]byte(data), &ret)
+		result, _ := json.MarshalIndent(ret, "", "  ")
+		fmt.Print("Call:", method+"("+strings.Join(args, ",")+") => ")
+		fmt.Println(string(result))
 	}
 
-	testcall("Search", "")
-	testcall("Charge", "0")
+	// testcall("Charge", "0")
+	//testcall("Search", "")
+
+	//testcall("Scancoupon","")
+	testcall("Purchase", "1", "2", "40", "0")
+	//testcall("Scancharge","1")
 }
 
 func test_of_pressure() {
