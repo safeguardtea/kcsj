@@ -309,10 +309,12 @@ func Puton(req Req) Ret {
 	price, _ := strconv.Atoi(temp[1])
 	introduce := temp[2]
 	number, _ := strconv.Atoi(temp[3])
+	imageData := temp[4]
 	seller_id := verifyToken(req.Token)
-	_, err := Db.Exec("insert into goods(name, image, price, introduce, others, amount, seller_id)values (?,'',?,?,'',?,?)", name, price, introduce, number, seller_id)
+	_, err := Db.Exec("insert into goods(name, image, price, introduce, others, amount, seller_id) values (?,?,?,?,'',?,?)", name, imageData, price, introduce, number, seller_id)
 	if err != nil {
-		RetErrorWithMessage("服务器错误")
+		//RetErrorWithMessage("服务器错误")
+		panic(err)
 	}
 	return Ret{
 		Status: "ok",
@@ -410,7 +412,10 @@ func Getcoupon(req Req) Ret {
 	if flag {
 		RetErrorWithMessage("已经领了该优惠券")
 	}
-	Db.Exec("insert into coupons(seller_id, buyers_id, conpon_id) values (?,?,?)", seller_id, uid, Id)
+	_, err = Db.Exec("insert into coupons(seller_id, buyers_id, coupon_id) values (?,?,?)", seller_id, uid, Id)
+	if err != nil {
+		panic(err)
+	}
 	return Ret{
 		Status: "ok",
 		Rets:   []string{},
@@ -449,7 +454,7 @@ func Putcart(req Req) Ret {
 	Db.Exec("insert into carts(good_id,buyer_id) values (?,?)", good_id, buyer_id)
 	return Ret{
 		Status: "ok",
-		Rets:   []string{},
+		Rets:   []string{"ok"},
 	}
 }
 
@@ -627,67 +632,69 @@ func creatUUID() string {
 }
 
 func Purchase(req Req) Ret { ///一次只能购买一种东西
-	temp := strings.Split(req.Args[0], "\x1f")
 	buyer_id := verifyToken(req.Token)
-	good_id, _ := strconv.Atoi(temp[0])
-	number, _ := strconv.Atoi(temp[1])
-	price, _ := strconv.Atoi(temp[2])
-	coupon_id, _ := strconv.Atoi(temp[3])
-	mutex_purchase.Lock()
-	defer mutex_purchase.Unlock()
+	for k := 0; k < len(req.Args); k++ {
+		temp := strings.Split(req.Args[k], "\x1f")
+		good_id, _ := strconv.Atoi(temp[0])
+		number, _ := strconv.Atoi(temp[1])
+		price, _ := strconv.Atoi(temp[2])
+		coupon_id, _ := strconv.Atoi(temp[3])
+		var good []GOODS
+		Db.Select(&good, "select * from goods where id=?", good_id)
+		if len(good) == 0 {
+			RetErrorWithMessage("无此商品")
+		}
+		if number > good[0].Number {
+			RetErrorWithMessage("超出库存")
+		}
+		seller_id := good[0].Seller_id
+		var buyer []BUYERS
+		Db.Select(&buyer, "select * from buyers where id=?", buyer_id)
+		if len(buyer) == 0 {
+			RetErrorWithMessage("没有该用户")
+		}
+		if buyer[0].Money-number < 0 {
+			RetErrorWithMessage("余额不足")
+		}
+		timestamp := time.Now().Unix()
+		_, err := Db.Exec("begin ;")
+		if err != nil {
+			panic(err)
+		}
+		_, err = Db.Exec("update buyers set money = money - ? where id= ?", price, buyer_id)
+		if err != nil {
+			Db.Exec("ROLLBACK")
+			panic(err)
+		}
+		_, err = Db.Exec("update sellers set adv_payment = adv_payment + ? where id = ?;", price, seller_id)
+		if err != nil {
+			Db.Exec("ROLLBACK")
+			panic(err)
+		}
+		_, err = Db.Exec("insert into trades(seller_id,buyer_id,good_id,price,number,status,time,UUID,transport_order) values(?,?,?,?,?,'waiting',?,?,'');", seller_id, buyer_id, good_id, price, number, timestamp, creatUUID())
+		if err != nil {
+			Db.Exec("ROLLBACK")
+			panic(err)
+		}
+		_, err = Db.Exec("update goods set amount = amount - ? where id = ?", number, good_id)
+		if err != nil {
+			Db.Exec("ROLLBACK")
+			panic(err)
+		}
+		_, err = Db.Exec("delete from coupons where buyers_id = ? and coupon_id = ?", buyer_id, coupon_id)
+		if err != nil {
+			Db.Exec("ROLLBACK")
+			panic(err)
+		}
+		Db.Exec("commit;")
+	}
+	temp := strings.Split(req.Args[0], "\x1f")
 	var good []GOODS
-	Db.Select(&good, "select * from goods where id=?", good_id)
-	if len(good) == 0 {
-		RetErrorWithMessage("无此商品")
-	}
-	if number > good[0].Number {
-		RetErrorWithMessage("超出库存")
-	}
-	seller_id := good[0].Seller_id
-	var buyer []BUYERS
-	Db.Select(&buyer, "select * from buyers where id=?", buyer_id)
-	if len(buyer) == 0 {
-		RetErrorWithMessage("没有该用户")
-	}
-	if buyer[0].Money-number < 0 {
-		RetErrorWithMessage("余额不足")
-	}
-	timestamp := time.Now().Unix()
-	//_,err:=Db.Exec("begin ;")
-	//if err!=nil{
-	//	panic(err)
-	//}
-	_, err := Db.Exec("update buyers set money = money - ? where id= ?", price, buyer_id)
-	if err != nil {
-		Db.Exec("ROLLBACK")
-		panic(err)
-	}
-	_, err = Db.Exec("update sellers set adv_payment = adv_payment + ? where id = ?;", price, seller_id)
-	if err != nil {
-		Db.Exec("ROLLBACK")
-		panic(err)
-	}
-	_, err = Db.Exec("insert into trades(seller_id,buyer_id,good_id,price,number,status,time,UUID,transport_order) values(?,?,?,?,?,'waiting',?,?,'');", seller_id, buyer_id, good_id, price, number, timestamp, creatUUID())
-	if err != nil {
-		Db.Exec("ROLLBACK")
-		panic(err)
-	}
-	_, err = Db.Exec("update goods set amount = amount - ? where id = ?", number, good_id)
-	if err != nil {
-		Db.Exec("ROLLBACK")
-		panic(err)
-	}
-	_, err = Db.Exec("delete from coupons where buyers_id = ? and coupon_id = ?", buyer_id, coupon_id)
-	if err != nil {
-		Db.Exec("ROLLBACK")
-		panic(err)
-	}
-	//Db.Exec("commit;")
-	//Db.Select(&buyer, "select * from buyers where id = ?;", buyer_id)
-	balance := strconv.Itoa(buyer[0].Money)
+	Db.Select(&good, "select * from goods where id = ?;", temp[0])
+	inventory := strconv.Itoa(good[0].Number)
 	return Ret{
 		Status: "ok",
-		Rets:   []string{balance},
+		Rets:   []string{inventory},
 	}
 }
 
@@ -850,11 +857,26 @@ func Search(req Req) Ret {
 	if err != nil {
 		panic(err)
 	}
-	log.Println(good)
 	tocode := make([]string, len(good), len(good)+5)
 	for i := 0; i < len(good); i++ {
 		tocode[i] = strconv.Itoa(good[i].Id) + "\x1f" + good[i].Name + "\x1f" + strconv.Itoa(good[i].Price) + "\x1f" + good[i].Image
-		log.Println(i, tocode[i])
+	}
+	return Ret{
+		Status: "ok",
+		Rets:   tocode,
+	}
+}
+
+func Searchself(req Req) Ret {
+	seller_id := verifyToken(req.Token)
+	var good []GOODS
+	err := Db.Select(&good, "select * from goods where seller_id=?", seller_id)
+	if err != nil {
+		panic(err)
+	}
+	tocode := make([]string, len(good), len(good)+5)
+	for i := 0; i < len(good); i++ {
+		tocode[i] = strconv.Itoa(good[i].Id) + "\x1f" + good[i].Name + "\x1f" + strconv.Itoa(good[i].Price) + "\x1f" + good[i].Image
 	}
 	return Ret{
 		Status: "ok",
@@ -923,6 +945,49 @@ func Scancoupon(req Req) Ret {
 	}
 }
 
+func Clickinformation(req Req) Ret {
+	temp := strings.Split(req.Args[0], "\x1f")
+	good_id := temp[0]
+	var good []GOODS
+	err := Db.Select(&good, "select * from goods where id =?", good_id)
+	if err != nil {
+		panic(err)
+	}
+	if len(good) == 0 {
+		RetErrorWithMessage("查无此商品")
+	}
+	tocode := make([]string, len(good), len(good)+5)
+	for i := 0; i < len(good); i++ {
+		tocode[i] = strconv.Itoa(good[i].Seller_id) + "\x1f" + good_id + "\x1f" + good[i].Name + "\x1f" + good[i].Introduce + "\x1f" + strconv.Itoa(good[i].Price) + "\x1f" + strconv.Itoa(good[i].Number) + "\x1f" + good[i].Others + "\x1f" + good[i].Image
+	}
+	return Ret{
+		Status: "ok",
+		Rets:   tocode,
+	}
+}
+
+func Scansellercoupon(req Req) Ret {
+	temp := strings.Split(req.Args[0], "\x1f")
+	seller_id := temp[0]
+	good_id := temp[1]
+	var coupon_type []COUPON_TYPE
+	err := Db.Select(&coupon_type, "select * from coupons_type where (seller_id = ? and good_id= ?)", seller_id, good_id)
+	if err != nil {
+		panic(err)
+	}
+	if len(coupon_type) == 0 {
+		RetErrorWithMessage("该商家无优惠券")
+	}
+	tocode := make([]string, len(coupon_type), len(coupon_type)+5)
+	for i := 0; i < len(coupon_type); i++ {
+		tocode[i] = strconv.Itoa(coupon_type[i].Id) + "\x1f" + discount_method(coupon_type[i].Others) + "\x1f" + strconv.Itoa(coupon_type[i].Amount)
+	}
+	return Ret{
+		Status: "ok",
+		Rets:   tocode,
+	}
+}
+
 func main() {
 	Tokens = make(map[string]int)
 	connectDb()
@@ -931,7 +996,7 @@ func main() {
 		fmt.Fprintln(w, indexHTML)
 	})
 
-	var Debug bool = true
+	var Debug bool = false
 	var auth AuthFunc = func(r *Req) bool {
 		if r.Method == "Login" {
 			return true
@@ -967,6 +1032,9 @@ func main() {
 	handlers["Scancart"] = Scancart
 	handlers["Scancoupon"] = Scancoupon
 	handlers["Scancharge"] = Scancharge
+	handlers["Clickinformation"] = Clickinformation
+	handlers["Scansellercoupon"] = Scansellercoupon
+	handlers["Searchself"] = Searchself
 	http.HandleFunc("/api", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method != "POST" {
